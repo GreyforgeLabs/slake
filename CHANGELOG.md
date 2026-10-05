@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-05
+
+### Changed
+
+- Renamed from `cooldown-guard` to `slake`: crate, binary, `--version` output and repository (`GreyforgeLabs/slake`). Releases up to 0.3.0 were published as `cooldown-guard`.
+- Release builds use fat LTO, a single codegen unit, symbol stripping and abort-on-panic. The x86_64 Linux release binary shrinks from 3.68 MB to 2.91 MB (-21%) with unchanged startup time and test results.
+- The default ledger path is resolved only when `--db` is omitted, so an explicit `--db` no longer depends on a resolvable home directory.
+
+### Deprecated
+
+- The `cooldown-guard` binary is installed as an alias for this release only. It prints a one-line deprecation note to stderr and then behaves exactly like `slake` (same arguments, stdout and exit codes). It will be removed in the next release; switch cron lines and scripts to `slake`.
+
+### Compatibility
+
+- Existing ledgers keep working. Without `--db`, slake uses its own ledger (`~/.local/state/slake/runs.sqlite3` on Linux) when it exists; otherwise it uses an existing `cooldown-guard` ledger in place: the Linux state directory (`$XDG_STATE_HOME/cooldown-guard/`, default `~/.local/state/cooldown-guard/`), the local data directory (`$XDG_DATA_HOME/cooldown-guard/`) or, on macOS, `~/Library/Application Support/tech.Greyforge.cooldown-guard/`. The legacy ledger is never copied or moved, so cooldowns and active claims carry over without a reset or an overlap window. With no ledger anywhere, a new one is created at the slake location. The SQLite schema is unchanged.
+
 ## [0.3.0] - 2026-09-27
 
 ### Fixed

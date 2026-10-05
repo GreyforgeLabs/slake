@@ -6,19 +6,22 @@
 ## Quick Bootstrap
 
 ```bash
-git clone https://github.com/GreyforgeLabs/cooldown-guard.git && cd cooldown-guard && ./scripts/setup.sh
+git clone https://github.com/GreyforgeLabs/slake.git && cd slake && ./scripts/setup.sh
 ```
 
 ## What This Project Does
 
-`cooldown-guard` is a Rust CLI for minimum-interval enforcement. It records completed command runs in SQLite, atomically leases named jobs without holding a transaction during execution, and applies separate success and failure cooldowns.
+`slake` (released as `cooldown-guard` up to v0.3.0) is a Rust CLI for minimum-interval enforcement. It records completed command runs in SQLite, atomically leases named jobs without holding a transaction during execution, and applies separate success and failure cooldowns.
 
 ## Project Structure
 
 ```text
-cooldown-guard/
+slake/
   src/
-    main.rs              # process entry point
+    main.rs              # `slake` process entry point
+    lib.rs               # implementation shared by both binaries (not a stable API)
+    bin/
+      cooldown-guard.rs  # deprecated alias: stderr note, then identical behaviour
     cli.rs               # clap command definitions and rendering
     db.rs                # SQLite schema and persistence helpers
     guard.rs             # cooldown logic and command execution
@@ -28,7 +31,7 @@ cooldown-guard/
   scripts/
     setup.sh             # idempotent build and verification script
   .github/workflows/
-    ci.yml               # fmt, clippy, and test workflow
+    ci.yml               # fmt, clippy, test, and MSRV (1.88) workflow
   README.md              # human-facing docs
   STARTHERE.md           # this file
 ```
@@ -41,26 +44,28 @@ cooldown-guard/
 
 ## Installation Steps
 
-1. Clone: `git clone https://github.com/GreyforgeLabs/cooldown-guard.git`
-2. Enter directory: `cd cooldown-guard`
+1. Clone: `git clone https://github.com/GreyforgeLabs/slake.git`
+2. Enter directory: `cd slake`
 3. Run setup: `./scripts/setup.sh`
 
 ## Verification
 
 ```bash
 cargo run --locked -- --version
-# Expected output: cooldown-guard 0.3.0
+# Expected output: slake 0.4.0
 ```
 
 ## Key Entry Points
 
 - `src/cli.rs` - subcommands and output formatting
-- `src/guard.rs` - cooldown evaluation and command execution
+- `src/guard.rs` - cooldown evaluation, command execution, and default ledger resolution
 - `src/db.rs` - SQLite schema and run history queries
 
 ## Configuration
 
-- Default state DB: platform state directory for `cooldown-guard`, usually `~/.local/state/cooldown-guard/runs.sqlite3` on Linux
+- Default state DB: platform state directory for `slake`, usually `~/.local/state/slake/runs.sqlite3` on Linux
+- Legacy ledger: if the slake DB does not exist but a `cooldown-guard` ledger does (`~/.local/state/cooldown-guard/runs.sqlite3`, `~/.local/share/cooldown-guard/runs.sqlite3`, or macOS `~/Library/Application Support/tech.Greyforge.cooldown-guard/runs.sqlite3`), it is used in place and never copied; see `default_db_path` in `src/guard.rs`
+- Deprecated alias: the `cooldown-guard` binary prints one stderr line and then behaves exactly like `slake`; it is removed in the next release
 - Override state DB: `--db /path/to/runs.sqlite3`
 - Output mode: add `--json`
 - Failure retry interval: `--failure-backoff 5m` (defaults to `--min-interval`)

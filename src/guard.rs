@@ -44,15 +44,61 @@ fn parse_positive_duration(value: &str, label: &str) -> Result<Duration> {
     Ok(duration)
 }
 
+const LEDGER_FILE: &str = "runs.sqlite3";
+const PROJECT_NAME: &str = "slake";
+/// The tool's name before 0.4.0. Its ledger directories are still honoured so
+/// that renaming the tool does not reset cooldowns or allow overlapping runs.
+const LEGACY_PROJECT_NAME: &str = "cooldown-guard";
+
+/// Resolves the ledger used when `--db` is not given.
+///
+/// The `slake` location wins whenever its ledger exists. Otherwise an existing
+/// ledger written by `cooldown-guard` (0.3.0 and earlier) is used in place; it
+/// is never copied or moved. With neither present, the `slake` location is used.
 pub fn default_db_path() -> Result<PathBuf> {
-    let project_dirs = ProjectDirs::from("tech", "Greyforge", "cooldown-guard")
+    let project_dirs = ProjectDirs::from("tech", "Greyforge", PROJECT_NAME)
         .context("could not resolve a default state directory")?;
+    let preferred = ledger_path(&project_dirs);
+    let legacy = ProjectDirs::from("tech", "Greyforge", LEGACY_PROJECT_NAME)
+        .map(|dirs| legacy_ledger_candidates(&dirs))
+        .unwrap_or_default();
 
-    if let Some(state_dir) = project_dirs.state_dir() {
-        return Ok(state_dir.join("runs.sqlite3"));
+    Ok(resolve_db_path(preferred, &legacy))
+}
+
+fn ledger_path(project_dirs: &ProjectDirs) -> PathBuf {
+    match project_dirs.state_dir() {
+        Some(state_dir) => state_dir.join(LEDGER_FILE),
+        None => project_dirs.data_local_dir().join(LEDGER_FILE),
     }
+}
 
-    Ok(project_dirs.data_local_dir().join("runs.sqlite3"))
+/// Every place `cooldown-guard` could have kept its ledger: the platform state
+/// directory (Linux `$XDG_STATE_HOME/cooldown-guard/`) and the local data
+/// directory (Linux `$XDG_DATA_HOME/cooldown-guard/`, macOS
+/// `~/Library/Application Support/tech.Greyforge.cooldown-guard/`, Windows
+/// `%LOCALAPPDATA%\Greyforge\cooldown-guard\data\`).
+fn legacy_ledger_candidates(project_dirs: &ProjectDirs) -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(state_dir) = project_dirs.state_dir() {
+        candidates.push(state_dir.join(LEDGER_FILE));
+    }
+    let data_local = project_dirs.data_local_dir().join(LEDGER_FILE);
+    if !candidates.contains(&data_local) {
+        candidates.push(data_local);
+    }
+    candidates
+}
+
+fn resolve_db_path(preferred: PathBuf, legacy: &[PathBuf]) -> PathBuf {
+    if preferred.exists() {
+        return preferred;
+    }
+    legacy
+        .iter()
+        .find(|candidate| candidate.is_file())
+        .cloned()
+        .unwrap_or(preferred)
 }
 
 pub fn open_database(path: &Path) -> Result<Connection> {
@@ -385,8 +431,40 @@ mod tests {
 
     use super::{
         ClaimOutcome, MAX_HISTORY_PER_JOB, claim_run, finalize_run, parse_min_interval,
-        remaining_seconds, run_guarded, validate_job_name,
+        remaining_seconds, resolve_db_path, run_guarded, validate_job_name,
     };
+
+    #[test]
+    fn default_ledger_falls_back_to_existing_legacy_ledger() {
+        let temp = TempDir::new().expect("tempdir");
+        let preferred = temp.path().join("slake").join("runs.sqlite3");
+        let legacy_state = temp.path().join("state").join("runs.sqlite3");
+        let legacy_data = temp.path().join("data").join("runs.sqlite3");
+        let legacy = [legacy_state.clone(), legacy_data.clone()];
+
+        assert_eq!(resolve_db_path(preferred.clone(), &legacy), preferred);
+
+        std::fs::create_dir_all(legacy_data.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_data, b"").unwrap();
+        assert_eq!(resolve_db_path(preferred.clone(), &legacy), legacy_data);
+
+        std::fs::create_dir_all(legacy_state.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_state, b"").unwrap();
+        assert_eq!(resolve_db_path(preferred.clone(), &legacy), legacy_state);
+
+        std::fs::create_dir_all(preferred.parent().unwrap()).unwrap();
+        std::fs::write(&preferred, b"").unwrap();
+        assert_eq!(resolve_db_path(preferred.clone(), &legacy), preferred);
+    }
+
+    #[test]
+    fn legacy_directory_without_ledger_is_ignored() {
+        let temp = TempDir::new().expect("tempdir");
+        let preferred = temp.path().join("slake").join("runs.sqlite3");
+        let legacy = temp.path().join("cooldown-guard").join("runs.sqlite3");
+        std::fs::create_dir_all(&legacy).unwrap();
+        assert_eq!(resolve_db_path(preferred.clone(), &[legacy]), preferred);
+    }
 
     #[test]
     fn parse_duration_requires_positive_value() {

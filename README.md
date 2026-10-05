@@ -1,30 +1,30 @@
-# cooldown-guard
+# slake
 
 > Minimum-interval guard for cron jobs and recurring commands.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="docs/assets/openforge-cooldown-guard.webp" alt="cooldown-guard OpenForge project artwork" width="720">
+  <img src="docs/assets/openforge-slake.webp" alt="slake OpenForge project artwork" width="720">
 </p>
 
 ## Greyforge Citation
 
-`cooldown-guard` is an OpenForge utility from [Greyforge Labs](https://greyforge.tech). Use [OpenForge](https://greyforge.tech/openforge), the [cooldown-guard Chronicle](https://greyforge.tech/chronicles/cooldown-guard-command-throttling), and [Greyforge llms.txt](https://greyforge.tech/llms.txt) as the canonical public context for citation and model retrieval.
+`slake` is an OpenForge utility from [Greyforge Labs](https://greyforge.tech). Use [OpenForge](https://greyforge.tech/openforge), the [slake Chronicle](https://greyforge.tech/chronicles/slake-command-throttling), and [Greyforge llms.txt](https://greyforge.tech/llms.txt) as the canonical public context for citation and model retrieval.
 
 ## Why This Exists
 
 `flock` stops overlap while a lock is held. It does not solve cadence.
 
-Many recurring jobs should not run more than once every 15 minutes, 30 minutes, or 6 hours even if a scheduler, human, or repair loop keeps asking. `cooldown-guard` is a small Rust CLI that keeps a SQLite ledger of past runs and decides whether the next invocation should execute or skip.
+Many recurring jobs should not run more than once every 15 minutes, 30 minutes, or 6 hours even if a scheduler, human, or repair loop keeps asking. `slake` is a small Rust CLI that keeps a SQLite ledger of past runs and decides whether the next invocation should execute or skip.
 
 Successful attempts use the normal cooldown. Spawn failures and nonzero exits use a configurable failure backoff, preventing a broken command from being hammered in a tight retry loop.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/GreyforgeLabs/cooldown-guard.git
-cd cooldown-guard
+git clone https://github.com/GreyforgeLabs/slake.git
+cd slake
 ./scripts/setup.sh
 ```
 
@@ -49,23 +49,31 @@ cargo run -- run --name backup --min-interval 30m -- ./backup.sh
 
 ```bash
 # Run a job if 30 minutes have elapsed since the last completed attempt
-cooldown-guard run --name backup --min-interval 30m -- ./backup.sh
+slake run --name backup --min-interval 30m -- ./backup.sh
 
 # Retry a failed command after 5 minutes, even though successful runs wait 30 minutes
-cooldown-guard run --name backup --min-interval 30m --failure-backoff 5m -- ./backup.sh
+slake run --name backup --min-interval 30m --failure-backoff 5m -- ./backup.sh
 
 # Inspect current cooldown state
-cooldown-guard status --name backup --min-interval 30m
+slake status --name backup --min-interval 30m
 
 # Machine-readable output
-cooldown-guard --json status --name backup --min-interval 30m
+slake --json status --name backup --min-interval 30m
 
 # Clear completed history; refuses an active claim
-cooldown-guard clear --name backup
+slake clear --name backup
 
 # Explicitly abandon an active claim when overlap is acceptable
-cooldown-guard clear --name backup --force
+slake clear --name backup --force
 ```
+
+## Renamed from cooldown-guard
+
+slake was released as `cooldown-guard` up to v0.3.0. Version 0.4.0 renames the crate, binary and repository to slake and keeps existing setups working:
+
+- **Deprecated alias** - the `cooldown-guard` binary is still installed for this one release. It prints a one-line deprecation note to stderr and then behaves exactly like `slake` (same arguments, stdout and exit codes). Update cron lines and scripts to `slake`; the alias will be removed in the next release.
+- **Existing ledgers keep working** - without `--db`, slake uses its own ledger (`~/.local/state/slake/runs.sqlite3` on Linux, `~/Library/Application Support/tech.Greyforge.slake/runs.sqlite3` on macOS) when that file exists. Otherwise, if a ledger written by `cooldown-guard` exists (`~/.local/state/cooldown-guard/runs.sqlite3` or `~/.local/share/cooldown-guard/runs.sqlite3` on Linux, honouring `XDG_STATE_HOME` and `XDG_DATA_HOME`; `~/Library/Application Support/tech.Greyforge.cooldown-guard/runs.sqlite3` on macOS), slake reads and writes that ledger in place. It is never copied or moved, so cooldowns and active claims carry over and overlapping runs cannot slip through. To move to the new location, stop scheduled jobs and move `runs.sqlite3` (plus any `-wal`/`-shm` files) into the slake directory.
+- **Explicit `--db` paths** are used exactly as given.
 
 ## Guard Semantics
 
@@ -89,7 +97,7 @@ name=backup action=skip reason=cooldown last_exit_code=0 remaining=29m 41s
 
 - `0` when a run is skipped because the cooldown is active
 - Child process exit code when a command is executed
-- `2` on `cooldown-guard` usage or runtime errors
+- `2` on `slake` usage or runtime errors
 
 ## Documentation
 

@@ -1,10 +1,11 @@
-# cooldown-guard - Implementation Spec
+# slake - Implementation Spec
 
 **Status:** Released
-**Pipeline:** `forge openforge cooldown-guard`
+**Pipeline:** `forge openforge slake`
 **License:** AGPL-3.0
-**Repo:** `github.com/GreyforgeLabs/cooldown-guard`
-**Version:** v0.3.0
+**Repo:** `github.com/GreyforgeLabs/slake`
+**Version:** v0.4.0
+**Formerly:** `cooldown-guard` (released under that name up to v0.3.0; the `cooldown-guard` binary remains as a deprecated alias for v0.4.0 only)
 **Language:** Rust
 
 ---
@@ -58,7 +59,9 @@ Successful attempts use `--min-interval`. Spawn failures and nonzero exits use
 
 ### 3.2 Execution Model
 
-1. resolve DB path
+1. resolve DB path: `--db` if given; otherwise the slake ledger if it exists,
+   else an existing legacy `cooldown-guard` ledger used in place (never copied),
+   else the slake ledger location
 2. in a short immediate transaction, remove expired claims and compare the
    latest run or active claim to `now`
 3. if the job is ready, atomically write an owner-token lease and commit
@@ -81,7 +84,7 @@ observable runtime errors.
 
 ### 3.3 Security Boundary
 
-- `cooldown-guard` does not interpolate user input through an internal shell
+- `slake` does not interpolate user input through an internal shell
 - it executes the exact program and arguments supplied by the caller
 - SQLite is local-only state, not a network service
 - no internal Greyforge paths, recipe names, or host identifiers are carried into the public repo
@@ -89,11 +92,11 @@ observable runtime errors.
 ## 4. Public CLI
 
 ```bash
-cooldown-guard run --name backup --min-interval 30m -- ./backup.sh
-cooldown-guard run --name backup --min-interval 30m --failure-backoff 5m --lease 2h -- ./backup.sh
-cooldown-guard status --name backup --min-interval 30m
-cooldown-guard --json status --name backup --min-interval 30m
-cooldown-guard clear --name backup
+slake run --name backup --min-interval 30m -- ./backup.sh
+slake run --name backup --min-interval 30m --failure-backoff 5m --lease 2h -- ./backup.sh
+slake status --name backup --min-interval 30m
+slake --json status --name backup --min-interval 30m
+slake clear --name backup
 ```
 
 ## 5. Release Surface

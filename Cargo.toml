@@ -1,14 +1,24 @@
 [package]
-name = "cooldown-guard"
-version = "0.3.0"
+name = "slake"
+version = "0.4.0"
 edition = "2024"
 description = "Minimum-interval guard for cron jobs and recurring commands"
 license = "AGPL-3.0-only"
-repository = "https://github.com/GreyforgeLabs/cooldown-guard"
+repository = "https://github.com/GreyforgeLabs/slake"
 homepage = "https://greyforge.tech"
 keywords = ["cli", "cron", "scheduler", "sqlite", "rust"]
 categories = ["command-line-utilities"]
 rust-version = "1.88"
+default-run = "slake"
+
+[[bin]]
+name = "slake"
+path = "src/main.rs"
+
+# Deprecated alias kept for one release so existing cron lines keep working.
+[[bin]]
+name = "cooldown-guard"
+path = "src/bin/cooldown-guard.rs"
 
 [dependencies]
 anyhow = "=1.0.102"
@@ -24,3 +34,10 @@ time = { version = "=0.3.47", features = ["formatting"] }
 assert_cmd = "=2.2.0"
 predicates = "=3.1.4"
 tempfile = "=3.27.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

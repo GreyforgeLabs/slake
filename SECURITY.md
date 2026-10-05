@@ -19,7 +19,7 @@ Instead, use one of these methods:
 
 ## Security Notes
 
-- `cooldown-guard` executes a command explicitly provided by the caller. It does not interpolate arbitrary input through an internal shell.
+- `slake` executes a command explicitly provided by the caller. It does not interpolate arbitrary input through an internal shell.
 - The SQLite database is local-only state. Use `--db` to point at a trusted location.
 - The project has no network features and no daemon mode in v0.1.
 

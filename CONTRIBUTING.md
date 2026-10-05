@@ -1,12 +1,12 @@
-# Contributing to cooldown-guard
+# Contributing to slake
 
 This project is intentionally small: one SQLite-backed CLI, one policy, one test suite. Keep changes focused and keep the execution contract predictable.
 
 ## Getting Started
 
 1. Fork the repository.
-2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/cooldown-guard.git`
-3. Enter the repo and run setup: `cd cooldown-guard && ./scripts/setup.sh`
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/slake.git`
+3. Enter the repo and run setup: `cd slake && ./scripts/setup.sh`
 5. Create a branch: `git checkout -b your-feature`
 
 ## Development Workflow

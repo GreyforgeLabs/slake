@@ -9,7 +9,7 @@ use predicates::str::contains;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("cooldown-guard").expect("binary should build")
+    Command::cargo_bin("slake").expect("binary should build")
 }
 
 fn temp_paths() -> (TempDir, String, String) {
@@ -133,7 +133,7 @@ fn clear_resets_saved_state() {
 fn clear_refuses_live_claim_without_force() {
     let (_temp, db, marker) = temp_paths();
     let started = format!("{marker}.started");
-    let mut running = std::process::Command::new(env!("CARGO_BIN_EXE_cooldown-guard"))
+    let mut running = std::process::Command::new(env!("CARGO_BIN_EXE_slake"))
         .args([
             "--db",
             &db,
@@ -194,7 +194,7 @@ fn clear_refuses_live_claim_without_force() {
 fn expired_lease_allows_overlap_and_stale_owner_cannot_finalize() {
     let (_temp, db, marker) = temp_paths();
     let started = format!("{marker}.started");
-    let mut first = std::process::Command::new(env!("CARGO_BIN_EXE_cooldown-guard"))
+    let mut first = std::process::Command::new(env!("CARGO_BIN_EXE_slake"))
         .args([
             "--db",
             &db,
@@ -364,7 +364,7 @@ fn unrelated_jobs_are_not_blocked_by_a_running_command() {
 #[test]
 fn spawn_failure_is_recorded_and_uses_configured_backoff() {
     let (_temp, db, _marker) = temp_paths();
-    let missing = "/definitely/not/a/cooldown-guard-command";
+    let missing = "/definitely/not/a/slake-command";
 
     let mut first = bin();
     first.args([
@@ -458,4 +458,289 @@ fn invalid_job_names_are_rejected() {
         .assert()
         .code(2)
         .stderr(contains("job name must start"));
+}
+
+fn alias_bin() -> Command {
+    Command::cargo_bin("cooldown-guard").expect("alias binary should build")
+}
+
+#[test]
+fn deprecated_alias_prints_one_note_and_behaves_like_slake() {
+    let (_temp, db, marker) = temp_paths();
+
+    let mut alias = alias_bin();
+    alias.args([
+        "--db",
+        &db,
+        "run",
+        "--name",
+        "backup",
+        "--min-interval",
+        "30m",
+        "--",
+        "sh",
+        "-c",
+        &format!("printf alias >> '{marker}'"),
+    ]);
+    let output = alias.assert().success().get_output().clone();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("deprecated"), "{stderr}");
+    assert!(stderr.contains("slake"), "{stderr}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("name=backup action=run exit_code=0"));
+    assert!(!stdout.contains("deprecated"));
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "alias");
+
+    // The ledger the alias wrote is the one slake reads.
+    let mut status = bin();
+    status.args([
+        "--db",
+        &db,
+        "status",
+        "--name",
+        "backup",
+        "--min-interval",
+        "30m",
+    ]);
+    status
+        .assert()
+        .success()
+        .stdout(contains("state=cooling-down"));
+
+    // Same stdout and exit code as slake for a deterministic query.
+    let args = [
+        "--db",
+        &db,
+        "--json",
+        "status",
+        "--name",
+        "never",
+        "--min-interval",
+        "1s",
+    ];
+    let slake_out = bin().args(args).assert().success().get_output().clone();
+    let alias_out = alias_bin()
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(slake_out.stdout, alias_out.stdout);
+    assert!(slake_out.stderr.is_empty());
+
+    // Usage errors keep exit code 2 under the alias too.
+    alias_bin()
+        .args(["--db", &db, "status", "--name", "x"])
+        .assert()
+        .code(2)
+        .stderr(contains("deprecated"));
+}
+
+/// Default ledger locations for a sandboxed HOME / XDG layout.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod default_ledger {
+    use std::path::{Path, PathBuf};
+
+    use assert_cmd::Command;
+    use predicates::str::contains;
+    use tempfile::TempDir;
+
+    pub struct Sandbox {
+        pub temp: TempDir,
+    }
+
+    impl Sandbox {
+        pub fn new() -> Self {
+            Self {
+                temp: TempDir::new().expect("tempdir"),
+            }
+        }
+
+        fn root(&self) -> &Path {
+            self.temp.path()
+        }
+
+        pub fn command(&self, bin: &str) -> Command {
+            let mut command = Command::cargo_bin(bin).expect("binary should build");
+            command
+                .env("HOME", self.root().join("home"))
+                .env("XDG_STATE_HOME", self.root().join("state"))
+                .env("XDG_DATA_HOME", self.root().join("data"))
+                .env_remove("XDG_CONFIG_HOME")
+                .env_remove("XDG_CACHE_HOME");
+            command
+        }
+
+        #[cfg(target_os = "linux")]
+        pub fn slake_ledger(&self) -> PathBuf {
+            self.root().join("state/slake/runs.sqlite3")
+        }
+
+        #[cfg(target_os = "linux")]
+        pub fn legacy_ledgers(&self) -> Vec<PathBuf> {
+            vec![
+                self.root().join("state/cooldown-guard/runs.sqlite3"),
+                self.root().join("data/cooldown-guard/runs.sqlite3"),
+            ]
+        }
+
+        #[cfg(target_os = "macos")]
+        pub fn slake_ledger(&self) -> PathBuf {
+            self.root()
+                .join("home/Library/Application Support/tech.Greyforge.slake/runs.sqlite3")
+        }
+
+        #[cfg(target_os = "macos")]
+        pub fn legacy_ledgers(&self) -> Vec<PathBuf> {
+            vec![self.root().join(
+                "home/Library/Application Support/tech.Greyforge.cooldown-guard/runs.sqlite3",
+            )]
+        }
+
+        /// Records a successful `name` run in the ledger at `path`.
+        pub fn seed(&self, path: &Path, name: &str) {
+            self.command("slake")
+                .arg("--db")
+                .arg(path)
+                .args(["run", "--name", name, "--min-interval", "1h", "--", "true"])
+                .assert()
+                .success()
+                .stdout(contains("action=run"));
+        }
+
+        pub fn default_status(&self, bin: &str, name: &str) -> String {
+            let output = self
+                .command(bin)
+                .args(["status", "--name", name, "--min-interval", "1h"])
+                .assert()
+                .success()
+                .get_output()
+                .clone();
+            String::from_utf8(output.stdout).unwrap()
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn default_ledger_uses_existing_cooldown_guard_ledger_in_place() {
+    let candidates = default_ledger::Sandbox::new().legacy_ledgers().len();
+    for index in 0..candidates {
+        let sandbox = default_ledger::Sandbox::new();
+        let legacy = sandbox.legacy_ledgers()[index].clone();
+        sandbox.seed(&legacy, "backup");
+        let before = fs::read(&legacy).unwrap();
+
+        for bin in ["slake", "cooldown-guard"] {
+            assert!(
+                sandbox
+                    .default_status(bin, "backup")
+                    .contains("state=cooling-down"),
+                "{bin} should read the legacy ledger at {}",
+                legacy.display()
+            );
+        }
+        assert!(
+            !sandbox.slake_ledger().exists(),
+            "the legacy ledger must not be copied to the slake location"
+        );
+
+        // A guarded run through the default path keeps writing the legacy ledger.
+        sandbox
+            .command("slake")
+            .args([
+                "run",
+                "--name",
+                "other",
+                "--min-interval",
+                "1h",
+                "--",
+                "true",
+            ])
+            .assert()
+            .success();
+        assert!(!sandbox.slake_ledger().exists());
+        assert_ne!(fs::read(&legacy).unwrap(), before);
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn default_ledger_prefers_slake_ledger_when_both_exist() {
+    let sandbox = default_ledger::Sandbox::new();
+    for legacy in sandbox.legacy_ledgers() {
+        sandbox.seed(&legacy, "legacy-job");
+    }
+    sandbox.seed(&sandbox.slake_ledger(), "slake-job");
+
+    for bin in ["slake", "cooldown-guard"] {
+        assert!(
+            sandbox
+                .default_status(bin, "slake-job")
+                .contains("state=cooling-down")
+        );
+        assert!(
+            sandbox
+                .default_status(bin, "legacy-job")
+                .contains("state=never-run")
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn default_ledger_is_created_at_slake_location_when_none_exists() {
+    let sandbox = default_ledger::Sandbox::new();
+    sandbox
+        .command("slake")
+        .args([
+            "run",
+            "--name",
+            "fresh",
+            "--min-interval",
+            "1h",
+            "--",
+            "true",
+        ])
+        .assert()
+        .success();
+    assert!(sandbox.slake_ledger().is_file());
+    for legacy in sandbox.legacy_ledgers() {
+        assert!(!legacy.exists());
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn explicit_db_ignores_default_and_legacy_ledgers() {
+    let sandbox = default_ledger::Sandbox::new();
+    let legacy = sandbox.legacy_ledgers()[0].clone();
+    sandbox.seed(&legacy, "backup");
+    let explicit = sandbox.temp.path().join("explicit/ledger.sqlite3");
+
+    sandbox
+        .command("slake")
+        .arg("--db")
+        .arg(&explicit)
+        .args(["status", "--name", "backup", "--min-interval", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("state=never-run"));
+    assert!(explicit.is_file());
+    assert!(!sandbox.slake_ledger().exists());
+
+    // --db does not depend on HOME or the XDG variables.
+    let unresolvable = sandbox.temp.path().join("no-home/ledger.sqlite3");
+    Command::cargo_bin("slake")
+        .unwrap()
+        .env_remove("HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .arg("--db")
+        .arg(&unresolvable)
+        .args(["status", "--name", "backup", "--min-interval", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("state=never-run"));
 }

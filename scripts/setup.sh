@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "=== cooldown-guard Setup ==="
+echo "=== slake Setup ==="
 
 check_command() {
     if ! command -v "$1" >/dev/null 2>&1; then

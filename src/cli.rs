@@ -9,7 +9,7 @@ use crate::model::{ClearResult, RunResult, StatusResult};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "cooldown-guard",
+    name = "slake",
     version,
     about = "Minimum-interval guard for cron jobs and recurring commands."
 )]
@@ -76,7 +76,10 @@ struct RunArgs {
 
 pub fn run() -> Result<i32> {
     let cli = Cli::parse();
-    let db_path = cli.db.unwrap_or(guard::default_db_path()?);
+    let db_path = match cli.db {
+        Some(path) => path,
+        None => guard::default_db_path()?,
+    };
     let mut connection = guard::open_database(&db_path)?;
 
     match cli.command {
