@@ -32,6 +32,8 @@ slake/
     setup.sh             # idempotent build and verification script
   .github/workflows/
     ci.yml               # fmt, clippy, test, and MSRV (1.88) workflow
+    release.yml          # tag-triggered Linux release tarball
+  .cargo/config.toml     # trims unused SQLite features from the bundled build
   README.md              # human-facing docs
   STARTHERE.md           # this file
 ```
@@ -52,7 +54,7 @@ slake/
 
 ```bash
 cargo run --locked -- --version
-# Expected output: slake 0.4.0
+# Expected output: slake 0.5.0
 ```
 
 ## Key Entry Points
@@ -65,7 +67,7 @@ cargo run --locked -- --version
 
 - Default state DB: platform state directory for `slake`, usually `~/.local/state/slake/runs.sqlite3` on Linux
 - Legacy ledger: if the slake DB does not exist but a `cooldown-guard` ledger does (`~/.local/state/cooldown-guard/runs.sqlite3`, `~/.local/share/cooldown-guard/runs.sqlite3`, or macOS `~/Library/Application Support/tech.Greyforge.cooldown-guard/runs.sqlite3`), it is used in place and never copied; see `default_db_path` in `src/guard.rs`
-- Deprecated alias: the `cooldown-guard` binary prints one stderr line and then behaves exactly like `slake`; it is removed in the next release
+- Deprecated alias: the `cooldown-guard` binary prints one stderr line and then behaves exactly like `slake`; it will be removed in a future release
 - Override state DB: `--db /path/to/runs.sqlite3`
 - Output mode: add `--json`
 - Failure retry interval: `--failure-backoff 5m` (defaults to `--min-interval`)

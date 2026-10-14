@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-14
+
+### Added
+
+- Stop signals (SIGHUP, SIGINT, SIGQUIT, SIGTERM) sent to slake while the command runs are relayed to the command. slake waits for it, records the result and releases the claim, so `kill`, `systemctl stop` or a shutdown no longer leaves the job blocked for the rest of its lease. Signals the caller ignores, such as SIGHUP under `nohup`, stay ignored for the command.
+- Run results report the terminating signal: `signal=N` in text output and a `"signal"` field (a number or `null`) in JSON output.
+- A tag-triggered release workflow publishes a Linux x86_64 tarball with a SHA-256 checksum.
+
+### Changed
+
+- A command terminated by signal `N` now makes slake exit with `128 + N` (for example `143` for SIGTERM), the convention shells use, instead of `1`.
+- The ledger records its schema revision in `PRAGMA user_version`. Older ledgers are upgraded once, in one immediate transaction, and later invocations skip the schema checks: one statement on open instead of seven, and no full-table scan per invocation. `status` and cooldown skips on a 50,000-row ledger run in 1.5 ms instead of 7.7–8.5 ms.
+- The unused seconds-precision index is dropped, and the millisecond index now also covers `id`, so newest-first reads and history pruning walk the index without sorting.
+- The bundled SQLite is built without features slake does not use (FTS, R*Tree, JSON, extension loading and others). The release binary is 27% smaller: 2.91 MB to 2.13 MB.
+- `serde`, `serde_json` and `time` are replaced by small built-in formatters with identical output, and clap no longer pulls in its color stack: the runtime dependency tree shrinks from 45 to 24 crates. Peak memory for a `status` call drops from 5.1 MB to 4.0 MB.
+
+### Fixed
+
+- After the wall clock is set backwards, runs and claims that lie in the future are rebased to the current time on the next `run`, so the job waits one interval or lease instead of until the clock catches up.
+- A failure to record a result now says which outcome (exit code, signal or spawn failure) was not recorded, and a closed stdout is reported as an error instead of aborting.
+
+### Compatibility
+
+- Text output, JSON fields and exit codes are unchanged apart from the additions above. Ledgers stay readable and writable by earlier releases.
+- The deprecated `cooldown-guard` alias is still installed and will be removed in a future release.
+
 ## [0.4.0] - 2026-10-05
 
 ### Changed

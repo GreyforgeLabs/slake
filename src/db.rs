@@ -7,14 +7,35 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::model::RunRecord;
 
+/// Schema revision recorded in `PRAGMA user_version`. Ledgers written by 0.4.0
+/// and earlier report 0 and are migrated once, in place, on first open.
+const SCHEMA_VERSION: i64 = 1;
+
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let connection = Connection::open(path)?;
+    let mut connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.execute_batch(
+    if schema_version(&connection)? < SCHEMA_VERSION {
+        migrate(&mut connection)?;
+    }
+    Ok(connection)
+}
+
+fn schema_version(connection: &Connection) -> rusqlite::Result<i64> {
+    connection.query_row("PRAGMA user_version", [], |row| row.get(0))
+}
+
+/// Creates or upgrades the schema inside one immediate transaction, so
+/// concurrent first opens of a legacy ledger cannot race on `ALTER TABLE`.
+fn migrate(connection: &mut Connection) -> Result<()> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if schema_version(&tx)? >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    tx.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,51 +53,33 @@ pub fn open(path: &Path) -> Result<Connection> {
             claimed_at_ms INTEGER NOT NULL,
             lease_expires_at_ms INTEGER NOT NULL
         );
-
-        CREATE INDEX IF NOT EXISTS idx_runs_name_finished_at
-            ON runs(name, finished_at DESC);
         ",
     )?;
-    ensure_run_millisecond_columns(&connection)?;
-    migrate_run_milliseconds(&connection)?;
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS idx_runs_name_finished_at_ms ON runs(name, finished_at_ms DESC)",
-        [],
-    )?;
-
-    Ok(connection)
-}
-
-fn ensure_run_millisecond_columns(connection: &Connection) -> Result<()> {
-    let mut statement = connection.prepare("PRAGMA table_info(runs)")?;
-    let columns = statement
+    let columns = tx
+        .prepare("PRAGMA table_info(runs)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-    if !columns.iter().any(|name| name == "started_at_ms") {
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN started_at_ms INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
+    for column in ["started_at_ms", "finished_at_ms"] {
+        if !columns.iter().any(|name| name == column) {
+            tx.execute_batch(&format!(
+                "ALTER TABLE runs ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            ))?;
+        }
     }
-    if !columns.iter().any(|name| name == "finished_at_ms") {
-        connection.execute(
-            "ALTER TABLE runs ADD COLUMN finished_at_ms INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-    }
-    Ok(())
-}
-
-fn migrate_run_milliseconds(connection: &Connection) -> Result<()> {
-    connection.execute(
-        "UPDATE runs SET started_at_ms = started_at * 1000 WHERE started_at_ms = 0",
-        [],
+    // v0.1 rows carry whole seconds only. The seconds index is unused since
+    // v0.2; the millisecond index gains `id` so newest-first reads and history
+    // pruning walk the index without a sort.
+    tx.execute_batch(
+        "
+        UPDATE runs SET started_at_ms = started_at * 1000 WHERE started_at_ms = 0;
+        UPDATE runs SET finished_at_ms = finished_at * 1000 WHERE finished_at_ms = 0;
+        DROP INDEX IF EXISTS idx_runs_name_finished_at;
+        DROP INDEX IF EXISTS idx_runs_name_finished_at_ms;
+        CREATE INDEX idx_runs_name_finished_at_ms ON runs(name, finished_at_ms DESC, id DESC);
+        ",
     )?;
-    connection.execute(
-        "UPDATE runs SET finished_at_ms = finished_at * 1000 WHERE finished_at_ms = 0",
-        [],
-    )?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -137,7 +140,78 @@ mod tests {
     use rusqlite::Connection;
     use tempfile::TempDir;
 
-    use super::{last_run, open};
+    use super::{SCHEMA_VERSION, last_run, open, schema_version};
+
+    #[test]
+    fn open_upgrades_a_0_4_ledger_once_and_keeps_its_rows() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("v0_4.sqlite3");
+        let legacy = Connection::open(&path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "
+                CREATE TABLE runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    finished_at INTEGER NOT NULL,
+                    started_at_ms INTEGER NOT NULL DEFAULT 0,
+                    finished_at_ms INTEGER NOT NULL DEFAULT 0,
+                    exit_code INTEGER,
+                    succeeded INTEGER NOT NULL CHECK (succeeded IN (0, 1))
+                );
+                CREATE TABLE run_claims (
+                    name TEXT PRIMARY KEY,
+                    owner_token TEXT NOT NULL,
+                    claimed_at_ms INTEGER NOT NULL,
+                    lease_expires_at_ms INTEGER NOT NULL
+                );
+                CREATE INDEX idx_runs_name_finished_at ON runs(name, finished_at DESC);
+                CREATE INDEX idx_runs_name_finished_at_ms ON runs(name, finished_at_ms DESC);
+                INSERT INTO runs
+                    (name, started_at, finished_at, started_at_ms, finished_at_ms, exit_code, succeeded)
+                VALUES ('job', 1, 2, 1500, 2500, 3, 0);
+                INSERT INTO run_claims VALUES ('job', 'owner', 1, 9223372036854775807);
+                ",
+            )
+            .expect("0.4 schema");
+        drop(legacy);
+
+        let migrated = open(&path).expect("migrated database");
+        assert_eq!(schema_version(&migrated).unwrap(), SCHEMA_VERSION);
+        let record = last_run(&migrated, "job").unwrap().expect("row kept");
+        assert_eq!((record.started_at, record.finished_at), (1500, 2500));
+        assert_eq!(record.exit_code, Some(3));
+        let claims: i64 = migrated
+            .query_row("SELECT count(*) FROM run_claims", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(claims, 1, "active claims survive the upgrade");
+        let indexes = migrated
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'runs'")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            indexes
+                .iter()
+                .all(|name| name != "idx_runs_name_finished_at")
+        );
+        let index_columns = migrated
+            .prepare("PRAGMA index_info(idx_runs_name_finished_at_ms)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(2))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(index_columns, ["name", "finished_at_ms", "id"]);
+        drop(migrated);
+
+        // A current ledger is opened without re-running the migration.
+        let reopened = open(&path).expect("reopened database");
+        assert_eq!(schema_version(&reopened).unwrap(), SCHEMA_VERSION);
+    }
 
     #[test]
     fn open_migrates_v0_1_second_precision_rows() {

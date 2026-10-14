@@ -1,6 +1,6 @@
 [package]
 name = "slake"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Minimum-interval guard for cron jobs and recurring commands"
 license = "AGPL-3.0-only"
@@ -15,20 +15,21 @@ default-run = "slake"
 name = "slake"
 path = "src/main.rs"
 
-# Deprecated alias kept for one release so existing cron lines keep working.
+# Deprecated alias kept so existing cron lines keep working; it will be removed
+# in a future release.
 [[bin]]
 name = "cooldown-guard"
 path = "src/bin/cooldown-guard.rs"
 
 [dependencies]
 anyhow = "=1.0.102"
-clap = { version = "=4.6.0", features = ["derive"] }
+clap = { version = "=4.6.0", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 directories = "=6.0.0"
 humantime = "=2.3.0"
-rusqlite = { version = "=0.39.0", features = ["bundled"] }
-serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.149"
-time = { version = "=0.3.47", features = ["formatting"] }
+rusqlite = { version = "=0.39.0", default-features = false, features = ["bundled"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.184"
 
 [dev-dependencies]
 assert_cmd = "=2.2.0"

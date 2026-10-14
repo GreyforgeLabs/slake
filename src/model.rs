@@ -1,5 +1,3 @@
-use serde::Serialize;
-
 #[derive(Debug, Clone)]
 pub struct RunRecord {
     pub name: String,
@@ -9,8 +7,7 @@ pub struct RunRecord {
     pub succeeded: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardState {
     NeverRun,
     Ready,
@@ -18,7 +15,7 @@ pub enum GuardState {
 }
 
 impl GuardState {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::NeverRun => "never-run",
             Self::Ready => "ready",
@@ -27,7 +24,7 @@ impl GuardState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct StatusResult {
     pub name: String,
     pub state: GuardState,
@@ -39,19 +36,21 @@ pub struct StatusResult {
     pub remaining_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct RunResult {
     pub name: String,
     pub action: &'static str,
     pub skipped: bool,
     pub exit_code: Option<i32>,
+    /// Signal that terminated the command, when it did not exit normally.
+    pub signal: Option<i32>,
     pub last_exit_code: Option<i32>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub remaining_seconds: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ClearResult {
     pub name: String,
     pub deleted_runs: usize,

@@ -1,0 +1,8 @@
+# Build the bundled SQLite (libsqlite3-sys) without features slake never uses:
+# full-text search, R*Tree, JSON, extension loading, deprecated APIs, shared
+# cache and progress callbacks. Every option here is on the SQLite
+# "recommended compile-time options" list or a documented omit that is
+# supported by the amalgamation. It trims about 0.8 MB from the release binary.
+# Applies to builds from this repository, including CI and release builds.
+[env]
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_COLUMN_METADATA -USQLITE_ENABLE_LOAD_EXTENSION -USQLITE_ENABLE_JSON1 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_JSON -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_DQS=0"

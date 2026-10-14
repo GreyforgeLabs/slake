@@ -744,3 +744,180 @@ fn explicit_db_ignores_default_and_legacy_ledgers() {
         .success()
         .stdout(contains("state=never-run"));
 }
+
+fn ledger_status(db: &str, name: &str) -> String {
+    let output = bin()
+        .args([
+            "--db",
+            db,
+            "status",
+            "--name",
+            name,
+            "--min-interval",
+            "1ms",
+        ])
+        .output()
+        .expect("status");
+    String::from_utf8(output.stdout).expect("utf-8 status")
+}
+
+#[test]
+fn signal_terminated_command_exits_128_plus_signal() {
+    let (_temp, db, _marker) = temp_paths();
+    let args = |json: bool| {
+        let mut command = bin();
+        if json {
+            command.arg("--json");
+        }
+        command.args([
+            "--db",
+            &db,
+            "run",
+            "--name",
+            if json { "killed-json" } else { "killed" },
+            "--min-interval",
+            "1ms",
+            "--",
+            "sh",
+            "-c",
+            "kill -TERM $$",
+        ]);
+        command
+    };
+    args(false)
+        .assert()
+        .code(143)
+        .stdout(contains("exit_code=signal").and(contains("signal=15")));
+    args(true)
+        .assert()
+        .code(143)
+        .stdout(contains("\"exit_code\": null").and(contains("\"signal\": 15")));
+}
+
+#[cfg(unix)]
+#[test]
+fn stop_signal_reaches_the_child_and_the_run_is_recorded() {
+    let (temp, db, _marker) = temp_paths();
+    let started = temp.path().join("started");
+    let mut slake = std::process::Command::new(env!("CARGO_BIN_EXE_slake"))
+        .args([
+            "--db",
+            &db,
+            "run",
+            "--name",
+            "stopped",
+            "--min-interval",
+            "1h",
+            "--failure-backoff",
+            "1ms",
+            "--",
+            "sh",
+            "-c",
+            "touch \"$0\"; exec sleep 30",
+            &started.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn slake");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "child never started");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let kill = std::process::Command::new("kill")
+        .args(["-TERM", &slake.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(kill.success());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = slake.try_wait().expect("wait") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "slake did not stop the child");
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        status.code(),
+        Some(143),
+        "slake outlives and reports the child"
+    );
+    let mut stdout = String::new();
+    std::io::Read::read_to_string(&mut slake.stdout.take().unwrap(), &mut stdout).unwrap();
+    assert!(stdout.contains("signal=15"), "{stdout}");
+
+    // The run was recorded and the claim released: a plain clear succeeds.
+    assert!(ledger_status(&db, "stopped").contains("state=ready"));
+    bin()
+        .args(["--db", &db, "clear", "--name", "stopped"])
+        .assert()
+        .success()
+        .stdout(contains("deleted_runs=1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn ignored_stop_signals_stay_ignored_for_the_child() {
+    let (_temp, db, _marker) = temp_paths();
+    // `trap '' HUP` is what nohup does: the child must inherit the ignore.
+    let output = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "trap '' HUP; exec \"$0\" --db \"$1\" run --name nohup2 --min-interval 1ms -- sh -c 'kill -HUP $$; echo survived'",
+            env!("CARGO_BIN_EXE_slake"),
+            &db,
+        ])
+        .output()
+        .expect("run under ignored SIGHUP");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("survived"), "{stdout}");
+}
+
+#[test]
+fn backwards_clock_jump_delays_a_job_by_one_interval_only() {
+    let (_temp, db, marker) = temp_paths();
+    bin()
+        .args([
+            "--db",
+            &db,
+            "status",
+            "--name",
+            "skewed",
+            "--min-interval",
+            "1s",
+        ])
+        .assert()
+        .success();
+    let future_ms: i64 = 4_102_444_800_000; // 2100-01-01, as left by a clock set back
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO runs (name, started_at, finished_at, started_at_ms, finished_at_ms, exit_code, succeeded)
+             VALUES ('skewed', ?1 / 1000, ?1 / 1000, ?1, ?1, 0, 1)",
+            [future_ms],
+        )
+        .unwrap();
+    let run = || {
+        let mut command = bin();
+        command.args([
+            "--db",
+            &db,
+            "run",
+            "--name",
+            "skewed",
+            "--min-interval",
+            "300ms",
+            "--",
+            "sh",
+            "-c",
+            &format!("printf ran >> {marker}"),
+        ]);
+        command
+    };
+    run().assert().success().stdout(contains("action=skip"));
+    thread::sleep(Duration::from_millis(400));
+    run().assert().success().stdout(contains("action=run"));
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "ran");
+}

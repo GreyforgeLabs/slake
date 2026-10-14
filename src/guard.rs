@@ -2,13 +2,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
 use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::db;
 use crate::model::{ClearResult, GuardState, RunRecord, RunResult, StatusResult};
@@ -128,6 +126,9 @@ pub fn run_guarded(
         return Err(anyhow!("missing command to execute"));
     }
 
+    // Installed before the claim so that a stop request arriving at any point
+    // reaches the child and the claim is still finalized.
+    let forwarding = signals::Forwarding::install();
     let owner_token = claim_token(name);
     let claim = claim_run(
         connection,
@@ -143,6 +144,7 @@ pub fn run_guarded(
             action: "skip",
             skipped: true,
             exit_code: None,
+            signal: None,
             last_exit_code: current_status.last_exit_code,
             started_at: None,
             finished_at: None,
@@ -153,9 +155,18 @@ pub fn run_guarded(
     let started_at = now_ms();
     let status = Command::new(&command[0])
         .args(&command[1..])
-        .status()
+        .spawn()
+        .and_then(|mut child| {
+            forwarding.child_started(child.id());
+            let status = child.wait();
+            forwarding.child_exited();
+            status
+        })
         .with_context(|| format!("failed to execute {:?}", command));
     let finished_at = now_ms();
+    // `forwarding` stays installed until this function returns, so a stop
+    // request that arrives while the result is recorded cannot interrupt the
+    // finalize transaction and leave the claim held.
 
     let record = RunRecord {
         name: name.to_owned(),
@@ -167,7 +178,17 @@ pub fn run_guarded(
             .and_then(std::process::ExitStatus::code),
         succeeded: status.as_ref().is_ok_and(std::process::ExitStatus::success),
     };
-    finalize_run(connection, &owner_token, &record)?;
+    let signal = status.as_ref().ok().and_then(signals::terminating_signal);
+    finalize_run(connection, &owner_token, &record).with_context(|| {
+        format!(
+            "{} was not recorded",
+            match (record.exit_code, signal) {
+                (Some(code), _) => format!("the command's exit code {code}"),
+                (None, Some(signal)) => format!("the command's termination by signal {signal}"),
+                (None, None) => "the spawn failure".to_owned(),
+            }
+        )
+    })?;
     status?;
 
     Ok(RunResult {
@@ -175,6 +196,7 @@ pub fn run_guarded(
         action: "run",
         skipped: false,
         exit_code: record.exit_code,
+        signal,
         last_exit_code: None,
         started_at: Some(format_timestamp(started_at)?),
         finished_at: Some(format_timestamp(finished_at)?),
@@ -203,9 +225,12 @@ fn claim_run(
         "DELETE FROM run_claims WHERE lease_expires_at_ms <= ?",
         params![now],
     )?;
+    rebase_future_timestamps(&tx, name, now)?;
     let current_status = status_at(&tx, name, min_interval, failure_backoff, now)?;
     if current_status.remaining_seconds.is_some() {
-        tx.rollback()?;
+        // Commit, not roll back, so that expired claims and any clock-skew
+        // rebase persist. With nothing changed the commit writes nothing.
+        tx.commit()?;
         return Ok(ClaimOutcome::CoolingDown(current_status));
     }
     tx.execute(
@@ -217,6 +242,30 @@ fn claim_run(
     )?;
     tx.commit()?;
     Ok(ClaimOutcome::Claimed)
+}
+
+/// Repairs timestamps that lie in the future, which only happens after the wall
+/// clock was set backwards. Left alone, such a row would block the job until
+/// the clock caught up again, possibly for years; rebased to `now`, the job
+/// waits exactly one interval (or one lease) from the moment the skew is seen.
+fn rebase_future_timestamps(tx: &Connection, name: &str, now: i64) -> Result<()> {
+    tx.execute(
+        "
+        UPDATE runs SET finished_at_ms = ?2, finished_at = ?2 / 1000,
+            started_at_ms = min(started_at_ms, ?2), started_at = min(started_at, ?2 / 1000)
+        WHERE name = ?1 AND finished_at_ms > ?2
+        ",
+        params![name, now],
+    )?;
+    tx.execute(
+        "
+        UPDATE run_claims
+        SET lease_expires_at_ms = ?2 + (lease_expires_at_ms - claimed_at_ms), claimed_at_ms = ?2
+        WHERE name = ?1 AND claimed_at_ms > ?2
+        ",
+        params![name, now],
+    )?;
+    Ok(())
 }
 
 fn finalize_run(connection: &mut Connection, owner_token: &str, record: &RunRecord) -> Result<()> {
@@ -255,13 +304,12 @@ fn finalize_run(connection: &mut Connection, owner_token: &str, record: &RunReco
     )?;
     tx.execute(
         "
-        DELETE FROM runs
-        WHERE name = ?
-          AND id NOT IN (
-            SELECT id FROM runs WHERE name = ? ORDER BY finished_at_ms DESC, id DESC LIMIT ?
-          )
+        DELETE FROM runs WHERE id IN (
+            SELECT id FROM runs WHERE name = ?1
+            ORDER BY finished_at_ms DESC, id DESC LIMIT -1 OFFSET ?2
+        )
         ",
-        params![record.name, record.name, MAX_HISTORY_PER_JOB],
+        params![record.name, MAX_HISTORY_PER_JOB],
     )?;
     tx.commit()?;
     Ok(())
@@ -376,17 +424,45 @@ fn duration_ms_i64(duration: Duration, label: &str) -> Result<i64> {
     i64::try_from(duration.as_millis()).with_context(|| format!("{label} is too large to store"))
 }
 
+/// Formats whole seconds of a millisecond Unix time as RFC 3339 UTC, for
+/// example `2026-04-07T15:16:39Z`.
 fn format_timestamp(unix_ms: i64) -> Result<String> {
-    let timestamp = OffsetDateTime::from_unix_timestamp(unix_ms / 1000)?;
-    Ok(timestamp.format(&Rfc3339)?)
+    let seconds = unix_ms / 1000;
+    let (days, second_of_day) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+    // Civil-from-days conversion (proleptic Gregorian calendar).
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    if !(0..=9999).contains(&year) {
+        return Err(anyhow!(
+            "timestamp {unix_ms} ms is outside the RFC 3339 year range"
+        ));
+    }
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second_of_day / 3600,
+        second_of_day / 60 % 60,
+        second_of_day % 60
+    ))
 }
 
 fn now_ms() -> i64 {
-    now_utc().unix_timestamp_nanos() as i64 / 1_000_000
-}
-
-fn now_utc() -> OffsetDateTime {
-    OffsetDateTime::now_utc()
+    let millis = |duration: Duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since) => millis(since),
+        Err(before) => -millis(before.duration()),
+    }
 }
 
 fn validate_job_name(name: &str) -> Result<()> {
@@ -409,12 +485,114 @@ fn validate_job_name(name: &str) -> Result<()> {
 
 fn claim_token(_name: &str) -> String {
     let sequence = CLAIM_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{}:{}:{}",
-        std::process::id(),
-        now_utc().unix_timestamp_nanos(),
-        sequence
-    )
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}:{nanos}:{sequence}", std::process::id())
+}
+
+/// Stop requests (SIGHUP, SIGINT, SIGQUIT, SIGTERM) are relayed to the child
+/// while it runs, so slake outlives it, records the result and releases the
+/// claim. Without this, `kill`, `systemctl stop` or a shutdown would end slake
+/// first and leave the claim blocking the job for the whole lease.
+#[cfg(unix)]
+mod signals {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    const RELAYED: [libc::c_int; 4] = [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM];
+    static CHILD: AtomicI32 = AtomicI32::new(0);
+    static PENDING: AtomicI32 = AtomicI32::new(0);
+
+    extern "C" fn relay(signal: libc::c_int, info: *mut libc::siginfo_t, _: *mut libc::c_void) {
+        let child = CHILD.load(Ordering::SeqCst);
+        if child == 0 {
+            // No child yet: hand the request to it as soon as it exists.
+            PENDING.store(signal, Ordering::SeqCst);
+        } else if unsafe { (*info).si_code } <= 0 {
+            // Sent by a process (kill, systemd). A terminal-generated signal
+            // (si_code > 0) already reached the child through its process group.
+            unsafe { libc::kill(child, signal) };
+        }
+    }
+
+    pub struct Forwarding {
+        previous: [libc::sigaction; RELAYED.len()],
+    }
+
+    impl Forwarding {
+        /// Installs the relay for every stop signal that is not ignored. A
+        /// signal the caller ignores (for example SIGHUP under `nohup`) stays
+        /// ignored, so the child keeps inheriting that disposition.
+        pub fn install() -> Self {
+            // SAFETY: plain sigaction calls with a zeroed, fully initialised
+            // struct; the handler only touches atomics and calls kill(2).
+            unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                let handler: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                    relay;
+                action.sa_sigaction = handler as libc::sighandler_t;
+                action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+                libc::sigemptyset(&mut action.sa_mask);
+                let mut previous: [libc::sigaction; RELAYED.len()] = std::mem::zeroed();
+                for (signal, slot) in RELAYED.iter().zip(previous.iter_mut()) {
+                    libc::sigaction(*signal, std::ptr::null(), slot);
+                    if slot.sa_sigaction != libc::SIG_IGN {
+                        libc::sigaction(*signal, &action, std::ptr::null_mut());
+                    }
+                }
+                Self { previous }
+            }
+        }
+
+        pub fn child_started(&self, pid: u32) {
+            let pid = pid as i32;
+            CHILD.store(pid, Ordering::SeqCst);
+            let pending = PENDING.swap(0, Ordering::SeqCst);
+            if pending != 0 {
+                unsafe { libc::kill(pid, pending) };
+            }
+        }
+
+        /// Called once the child is reaped, before its PID can be reused.
+        pub fn child_exited(&self) {
+            CHILD.store(0, Ordering::SeqCst);
+        }
+    }
+
+    impl Drop for Forwarding {
+        fn drop(&mut self) {
+            self.child_exited();
+            PENDING.store(0, Ordering::SeqCst);
+            for (signal, previous) in RELAYED.iter().zip(self.previous.iter()) {
+                unsafe { libc::sigaction(*signal, previous, std::ptr::null_mut()) };
+            }
+        }
+    }
+
+    pub fn terminating_signal(status: &ExitStatus) -> Option<i32> {
+        status.signal()
+    }
+}
+
+#[cfg(not(unix))]
+mod signals {
+    use std::process::ExitStatus;
+
+    pub struct Forwarding;
+
+    impl Forwarding {
+        pub fn install() -> Self {
+            Self
+        }
+        pub fn child_started(&self, _pid: u32) {}
+        pub fn child_exited(&self) {}
+    }
+
+    pub fn terminating_signal(_status: &ExitStatus) -> Option<i32> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -430,9 +608,73 @@ mod tests {
     use crate::model::RunRecord;
 
     use super::{
-        ClaimOutcome, MAX_HISTORY_PER_JOB, claim_run, finalize_run, parse_min_interval,
-        remaining_seconds, resolve_db_path, run_guarded, validate_job_name,
+        ClaimOutcome, MAX_HISTORY_PER_JOB, claim_run, finalize_run, format_timestamp,
+        parse_min_interval, remaining_seconds, resolve_db_path, run_guarded, validate_job_name,
     };
+
+    #[test]
+    fn timestamps_format_as_rfc3339_utc() {
+        for (unix_ms, expected) in [
+            (0, "1970-01-01T00:00:00Z"),
+            (999, "1970-01-01T00:00:00Z"),
+            (-1000, "1969-12-31T23:59:59Z"),
+            (31_536_000_000, "1971-01-01T00:00:00Z"),
+            (951_782_400_000, "2000-02-29T00:00:00Z"),
+            (1_775_574_999_000, "2026-04-07T15:16:39Z"),
+            (4_107_542_399_000, "2100-02-28T23:59:59Z"),
+            (4_107_542_400_000, "2100-03-01T00:00:00Z"),
+            (-62_167_219_200_000, "0000-01-01T00:00:00Z"),
+            (253_402_300_799_000, "9999-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(format_timestamp(unix_ms).unwrap(), expected, "{unix_ms}");
+        }
+        assert!(format_timestamp(253_402_300_800_000).is_err());
+        assert!(format_timestamp(-62_167_219_201_000).is_err());
+    }
+
+    #[test]
+    fn claim_rebases_timestamps_left_in_the_future_by_a_clock_change() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut connection = db::open(&temp.path().join("runs.sqlite3")).expect("database");
+        let future = super::now_ms() + 10 * 365 * 86_400_000;
+        connection
+            .execute(
+                "
+                INSERT INTO runs
+                    (name, started_at, finished_at, started_at_ms, finished_at_ms, exit_code, succeeded)
+                VALUES ('skewed', ?1 / 1000, ?1 / 1000, ?1, ?1, 0, 1)
+                ",
+                params![future],
+            )
+            .expect("future row");
+        let claim = |connection: &mut rusqlite::Connection| {
+            claim_run(
+                connection,
+                "skewed",
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+                Duration::from_secs(60),
+                "owner",
+            )
+            .expect("claim")
+        };
+        // The skewed row is rebased to now, so one interval still applies ...
+        assert!(matches!(
+            claim(&mut connection),
+            ClaimOutcome::CoolingDown(_)
+        ));
+        let finished: i64 = connection
+            .query_row(
+                "SELECT finished_at_ms FROM runs WHERE name = 'skewed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("rebased row");
+        assert!(finished <= super::now_ms());
+        // ... and only one interval, not ten years.
+        thread::sleep(Duration::from_millis(80));
+        assert!(matches!(claim(&mut connection), ClaimOutcome::Claimed));
+    }
 
     #[test]
     fn default_ledger_falls_back_to_existing_legacy_ledger() {
