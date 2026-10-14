@@ -465,6 +465,11 @@ fn now_ms() -> i64 {
     }
 }
 
+/// Called after a run's result is printed. See `signals::end_like_command`.
+pub fn end_like_command(signal: i32) {
+    signals::end_like_command(signal);
+}
+
 fn validate_job_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 128 {
         return Err(anyhow!("job name must be 1..128 ASCII characters"));
@@ -574,6 +579,18 @@ mod signals {
     pub fn terminating_signal(status: &ExitStatus) -> Option<i32> {
         status.signal()
     }
+
+    /// Ends slake by the signal that ended the command, for SIGHUP, SIGINT and
+    /// SIGTERM. Shells still see `128 + N`, but supervisors see a signal death
+    /// as they would without slake: systemd counts a stop as clean, and a shell
+    /// script interrupted with Ctrl-C stops instead of carrying on. Returns
+    /// when the signal is ignored or blocked; the caller then exits `128 + N`.
+    pub fn end_like_command(signal: i32) {
+        if [libc::SIGHUP, libc::SIGINT, libc::SIGTERM].contains(&signal) {
+            // SAFETY: raise(3) with a valid signal number.
+            unsafe { libc::raise(signal) };
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -593,6 +610,8 @@ mod signals {
     pub fn terminating_signal(_status: &ExitStatus) -> Option<i32> {
         None
     }
+
+    pub fn end_like_command(_signal: i32) {}
 }
 
 #[cfg(test)]

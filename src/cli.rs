@@ -102,6 +102,9 @@ pub fn run() -> Result<i32> {
                 &args.command,
             )?;
             print_run_result(&result, cli.json)?;
+            if let Some(signal) = result.signal {
+                guard::end_like_command(signal);
+            }
             Ok(exit_code(&result))
         }
         Commands::Status(args) => {
@@ -126,6 +129,8 @@ pub fn run() -> Result<i32> {
 
 /// The process exit code for a run: the child's own code, `128 + signal` when a
 /// signal terminated it (the shell convention), and 0 for a cooldown skip.
+/// SIGHUP, SIGINT and SIGTERM are re-raised first, so for those the shell sees
+/// the same `128 + signal` and other parents see a signal death.
 fn exit_code(result: &RunResult) -> i32 {
     match (result.exit_code, result.signal) {
         (Some(code), _) => code,

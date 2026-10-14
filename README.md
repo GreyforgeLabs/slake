@@ -101,7 +101,7 @@ name=backup action=skip reason=cooldown last_exit_code=0 remaining=29m 41s
 
 - `0` when a run is skipped because the cooldown is active
 - Child process exit code when a command is executed
-- `128 + N` when the command is terminated by signal `N` (the shell convention, for example `143` for SIGTERM); the output then also reports `signal=N` (`"signal": N` in JSON)
+- `128 + N` when the command is terminated by signal `N` (the shell convention, for example `143` for SIGTERM); the output then also reports `signal=N` (`"signal": N` in JSON). For SIGHUP, SIGINT and SIGTERM, slake records and prints the result and then ends by the same signal, so a shell still sees `128 + N` while systemd and other supervisors see the signal death they would see without slake
 - `2` on `slake` usage or runtime errors
 
 ## Documentation

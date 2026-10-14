@@ -764,7 +764,7 @@ fn ledger_status(db: &str, name: &str) -> String {
 #[test]
 fn signal_terminated_command_exits_128_plus_signal() {
     let (_temp, db, _marker) = temp_paths();
-    let args = |json: bool| {
+    let args = |json: bool, signal: &str| {
         let mut command = bin();
         if json {
             command.arg("--json");
@@ -774,24 +774,71 @@ fn signal_terminated_command_exits_128_plus_signal() {
             &db,
             "run",
             "--name",
-            if json { "killed-json" } else { "killed" },
+            &format!("killed-{signal}-{json}"),
             "--min-interval",
             "1ms",
             "--",
             "sh",
             "-c",
-            "kill -TERM $$",
+            &format!("kill -{signal} $$"),
         ]);
         command
     };
-    args(false)
+    // SIGKILL is not a stop request, so slake exits 128 + 9.
+    args(false, "KILL")
         .assert()
-        .code(143)
-        .stdout(contains("exit_code=signal").and(contains("signal=15")));
-    args(true)
+        .code(137)
+        .stdout(contains("exit_code=signal").and(contains("signal=9")));
+    args(true, "KILL")
         .assert()
-        .code(143)
-        .stdout(contains("\"exit_code\": null").and(contains("\"signal\": 15")));
+        .code(137)
+        .stdout(contains("\"exit_code\": null").and(contains("\"signal\": 9")));
+}
+
+/// SIGHUP, SIGINT and SIGTERM end slake the way they ended the command, after
+/// the result is recorded and printed: a shell still sees 128 + N, while a
+/// supervisor such as systemd sees a signal death, as it would without slake.
+#[cfg(unix)]
+#[test]
+fn stop_signal_deaths_are_passed_on_to_the_parent() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let (_temp, db, _marker) = temp_paths();
+    for (signal, number) in [("TERM", 15), ("INT", 2), ("HUP", 1)] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_slake"))
+            .args([
+                "--db",
+                &db,
+                "--json",
+                "run",
+                "--name",
+                &format!("died-{signal}"),
+                "--min-interval",
+                "1ms",
+                "--",
+                "sh",
+                "-c",
+                &format!("kill -{signal} $$"),
+            ])
+            .output()
+            .expect("run slake");
+        assert_eq!(output.status.signal(), Some(number), "{signal}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("\"signal\": {number}")),
+            "{stdout}"
+        );
+    }
+    let shell = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "\"$0\" --db \"$1\" run --name shell-view --min-interval 1ms -- sh -c 'kill -TERM $$' >/dev/null; echo $?",
+            env!("CARGO_BIN_EXE_slake"),
+            &db,
+        ])
+        .output()
+        .expect("run slake from a shell");
+    assert_eq!(String::from_utf8_lossy(&shell.stdout).trim(), "143");
 }
 
 #[cfg(unix)]
@@ -839,9 +886,9 @@ fn stop_signal_reaches_the_child_and_the_run_is_recorded() {
         thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(
-        status.code(),
-        Some(143),
-        "slake outlives and reports the child"
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(15),
+        "slake outlives and reports the child, then ends like it"
     );
     let mut stdout = String::new();
     std::io::Read::read_to_string(&mut slake.stdout.take().unwrap(), &mut stdout).unwrap();

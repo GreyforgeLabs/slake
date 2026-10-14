@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 
-- A command terminated by signal `N` now makes slake exit with `128 + N` (for example `143` for SIGTERM), the convention shells use, instead of `1`.
+- A command terminated by signal `N` now makes slake exit with `128 + N` (for example `137` for SIGKILL), the convention shells use, instead of `1`. For SIGHUP, SIGINT and SIGTERM, slake records and prints the result and then ends by the same signal: shells still see `128 + N` (`143` for SIGTERM), systemd counts a `systemctl stop` as a clean stop, and Ctrl-C stops a calling shell script.
 - The ledger records its schema revision in `PRAGMA user_version`. Older ledgers are upgraded once, in one immediate transaction, and later invocations skip the schema checks: one statement on open instead of seven, and no full-table scan per invocation. `status` and cooldown skips on a 50,000-row ledger run in 1.5 ms instead of 7.7–8.5 ms.
 - The unused seconds-precision index is dropped, and the millisecond index now also covers `id`, so newest-first reads and history pruning walk the index without sorting.
 - The bundled SQLite is built without features slake does not use (FTS, R*Tree, JSON, extension loading and others). The release binary is 27% smaller: 2.91 MB to 2.13 MB.
