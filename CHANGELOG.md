@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Durations and the job name are validated before the ledger is opened. A mistyped invocation no longer creates the ledger file and its directory, and no longer waits on a locked ledger before it reports the usage error.
+
 ## [0.5.0] - 2026-10-14
 
 ### Added

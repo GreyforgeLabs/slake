@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -75,31 +76,96 @@ struct RunArgs {
     command: Vec<String>,
 }
 
+/// A command line whose durations and job name have been validated.
+enum Request {
+    Run {
+        name: String,
+        min_interval: Duration,
+        failure_backoff: Duration,
+        lease: Duration,
+        command: Vec<String>,
+    },
+    Status {
+        name: String,
+        min_interval: Duration,
+        failure_backoff: Duration,
+    },
+    Clear {
+        name: String,
+        force: bool,
+    },
+}
+
+impl Request {
+    /// Validates every argument up front, so that a usage error is reported
+    /// before the ledger is created, migrated or waited on.
+    fn parse(command: Commands) -> Result<Self> {
+        let intervals = |min_interval: &str, failure_backoff: Option<&str>| -> Result<_> {
+            let min_interval = guard::parse_min_interval(min_interval)?;
+            let failure_backoff = failure_backoff
+                .map(guard::parse_failure_backoff)
+                .transpose()?
+                .unwrap_or(min_interval);
+            Ok((min_interval, failure_backoff))
+        };
+        Ok(match command {
+            Commands::Run(args) => {
+                guard::validate_job_name(&args.name)?;
+                let (min_interval, failure_backoff) =
+                    intervals(&args.min_interval, args.failure_backoff.as_deref())?;
+                Self::Run {
+                    name: args.name,
+                    min_interval,
+                    failure_backoff,
+                    lease: guard::parse_lease_duration(&args.lease)?,
+                    command: args.command,
+                }
+            }
+            Commands::Status(args) => {
+                guard::validate_job_name(&args.name)?;
+                let (min_interval, failure_backoff) =
+                    intervals(&args.min_interval, args.failure_backoff.as_deref())?;
+                Self::Status {
+                    name: args.name,
+                    min_interval,
+                    failure_backoff,
+                }
+            }
+            Commands::Clear(args) => {
+                guard::validate_job_name(&args.name)?;
+                Self::Clear {
+                    name: args.name,
+                    force: args.force,
+                }
+            }
+        })
+    }
+}
+
 pub fn run() -> Result<i32> {
     let cli = Cli::parse();
+    let request = Request::parse(cli.command)?;
     let db_path = match cli.db {
         Some(path) => path,
         None => guard::default_db_path()?,
     };
     let mut connection = guard::open_database(&db_path)?;
 
-    match cli.command {
-        Commands::Run(args) => {
-            let min_interval = guard::parse_min_interval(&args.min_interval)?;
-            let failure_backoff = args
-                .failure_backoff
-                .as_deref()
-                .map(guard::parse_failure_backoff)
-                .transpose()?
-                .unwrap_or(min_interval);
-            let lease_duration = guard::parse_lease_duration(&args.lease)?;
+    match request {
+        Request::Run {
+            name,
+            min_interval,
+            failure_backoff,
+            lease,
+            command,
+        } => {
             let result = guard::run_guarded(
                 &mut connection,
-                &args.name,
+                &name,
                 min_interval,
                 failure_backoff,
-                lease_duration,
-                &args.command,
+                lease,
+                &command,
             )?;
             print_run_result(&result, cli.json)?;
             if let Some(signal) = result.signal {
@@ -107,20 +173,17 @@ pub fn run() -> Result<i32> {
             }
             Ok(exit_code(&result))
         }
-        Commands::Status(args) => {
-            let min_interval = guard::parse_min_interval(&args.min_interval)?;
-            let failure_backoff = args
-                .failure_backoff
-                .as_deref()
-                .map(guard::parse_failure_backoff)
-                .transpose()?
-                .unwrap_or(min_interval);
-            let result = guard::status(&connection, &args.name, min_interval, failure_backoff)?;
+        Request::Status {
+            name,
+            min_interval,
+            failure_backoff,
+        } => {
+            let result = guard::status(&connection, &name, min_interval, failure_backoff)?;
             print_status_result(&result, cli.json)?;
             Ok(0)
         }
-        Commands::Clear(args) => {
-            let result = guard::clear(&mut connection, &args.name, args.force)?;
+        Request::Clear { name, force } => {
+            let result = guard::clear(&mut connection, &name, force)?;
             print_clear_result(&result, cli.json)?;
             Ok(0)
         }

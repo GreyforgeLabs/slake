@@ -968,3 +968,58 @@ fn backwards_clock_jump_delays_a_job_by_one_interval_only() {
     run().assert().success().stdout(contains("action=run"));
     assert_eq!(fs::read_to_string(&marker).unwrap(), "ran");
 }
+
+/// Usage errors are reported before the ledger is touched, so a mistyped
+/// invocation neither creates a ledger nor waits on a locked one.
+#[test]
+fn invalid_arguments_do_not_create_a_ledger() {
+    let temp = TempDir::new().expect("tempdir");
+    let db = temp.path().join("never/created.sqlite3");
+    let db = db.to_string_lossy();
+    for args in [
+        vec!["status", "--name", "not normalized", "--min-interval", "1s"],
+        vec!["status", "--name", "job", "--min-interval", "30"],
+        vec![
+            "status",
+            "--name",
+            "job",
+            "--min-interval",
+            "1s",
+            "--failure-backoff",
+            "0s",
+        ],
+        vec!["clear", "--name", "_underscore"],
+        vec!["run", "--name", "job", "--min-interval", "0s", "--", "true"],
+        vec![
+            "run",
+            "--name",
+            "job",
+            "--min-interval",
+            "1s",
+            "--lease",
+            "1us",
+            "--",
+            "true",
+        ],
+        vec![
+            "run",
+            "--name",
+            "bad/name",
+            "--min-interval",
+            "1s",
+            "--",
+            "true",
+        ],
+    ] {
+        bin()
+            .args(["--db", &db])
+            .args(&args)
+            .assert()
+            .code(2)
+            .stderr(contains("error:"));
+        assert!(
+            !temp.path().join("never").exists(),
+            "{args:?} created the ledger directory"
+        );
+    }
+}

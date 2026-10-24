@@ -470,7 +470,7 @@ pub fn end_like_command(signal: i32) {
     signals::end_like_command(signal);
 }
 
-fn validate_job_name(name: &str) -> Result<()> {
+pub fn validate_job_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 128 {
         return Err(anyhow!("job name must be 1..128 ASCII characters"));
     }
