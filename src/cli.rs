@@ -191,7 +191,8 @@ pub fn run() -> Result<i32> {
 }
 
 /// The process exit code for a run: the child's own code, `128 + signal` when a
-/// signal terminated it (the shell convention), and 0 for a cooldown skip.
+/// signal terminated it (the shell convention) or stopped slake before the
+/// command started, and 0 for a cooldown skip.
 /// SIGHUP, SIGINT and SIGTERM are re-raised first, so for those the shell sees
 /// the same `128 + signal` and other parents see a signal death.
 fn exit_code(result: &RunResult) -> i32 {
@@ -217,7 +218,13 @@ fn print_run_result(result: &RunResult, json: bool) -> Result<()> {
         ]);
     }
 
-    let line = if result.skipped {
+    let line = if result.action == "stop" {
+        format!(
+            "name={} action=stop reason=signal signal={}",
+            result.name,
+            or_text(result.signal, "unknown"),
+        )
+    } else if result.skipped {
         format!(
             "name={} action=skip reason=cooldown last_exit_code={} remaining={}",
             result.name,

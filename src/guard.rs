@@ -152,6 +152,26 @@ pub fn run_guarded(
         });
     }
 
+    if let Some(signal) = forwarding.pending_stop() {
+        // A stop request arrived before the command was started, for example
+        // while the claim waited for the ledger lock. Starting the command now
+        // would only kill it at once and record a failure, so give the claim
+        // back and start nothing.
+        release_claim(connection, name, &owner_token)
+            .context("the claim could not be released after a stop request")?;
+        return Ok(RunResult {
+            name: name.to_owned(),
+            action: "stop",
+            skipped: true,
+            exit_code: None,
+            signal: Some(signal),
+            last_exit_code: None,
+            started_at: None,
+            finished_at: None,
+            remaining_seconds: None,
+        });
+    }
+
     let started_at = now_ms();
     let status = Command::new(&command[0])
         .args(&command[1..])
@@ -265,6 +285,17 @@ fn rebase_future_timestamps(tx: &Connection, name: &str, now: i64) -> Result<()>
         ",
         params![name, now],
     )?;
+    Ok(())
+}
+
+/// Deletes this invocation's claim without recording a run.
+fn release_claim(connection: &mut Connection, name: &str, owner_token: &str) -> Result<()> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "DELETE FROM run_claims WHERE name = ? AND owner_token = ?",
+        params![name, owner_token],
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -551,6 +582,14 @@ mod signals {
             }
         }
 
+        /// Takes a stop request that arrived before any child existed.
+        pub fn pending_stop(&self) -> Option<i32> {
+            match PENDING.swap(0, Ordering::SeqCst) {
+                0 => None,
+                signal => Some(signal),
+            }
+        }
+
         pub fn child_started(&self, pid: u32) {
             let pid = pid as i32;
             CHILD.store(pid, Ordering::SeqCst);
@@ -602,6 +641,9 @@ mod signals {
     impl Forwarding {
         pub fn install() -> Self {
             Self
+        }
+        pub fn pending_stop(&self) -> Option<i32> {
+            None
         }
         pub fn child_started(&self, _pid: u32) {}
         pub fn child_exited(&self) {}

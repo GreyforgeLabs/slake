@@ -1023,3 +1023,87 @@ fn invalid_arguments_do_not_create_a_ledger() {
         );
     }
 }
+
+/// True once `pid` has a handler installed for SIGTERM (Linux `SigCgt`).
+#[cfg(target_os = "linux")]
+fn catches_sigterm(pid: u32) -> bool {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("SigCgt:"))
+        .and_then(|mask| u64::from_str_radix(mask.trim(), 16).ok())
+        .is_some_and(|mask| mask & (1 << (15 - 1)) != 0)
+}
+
+/// A stop request that arrives before the command is started (here, while
+/// slake waits for the ledger lock) releases the claim and starts nothing,
+/// instead of starting the command only to kill it and record a failure.
+#[cfg(target_os = "linux")]
+#[test]
+fn stop_signal_before_the_command_starts_runs_nothing_and_releases_the_claim() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let (temp, db, _marker) = temp_paths();
+    let started = temp.path().join("started");
+    assert!(ledger_status(&db, "early").contains("state=never-run"));
+
+    let mut lock = rusqlite::Connection::open(&db).expect("ledger");
+    let held = lock
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .expect("hold the ledger write lock");
+    let mut slake = std::process::Command::new(env!("CARGO_BIN_EXE_slake"))
+        .args([
+            "--db",
+            &db,
+            "--json",
+            "run",
+            "--name",
+            "early",
+            "--min-interval",
+            "1h",
+            "--",
+            "sh",
+            "-c",
+            "touch \"$0\"; exec sleep 30",
+            &started.to_string_lossy(),
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn slake");
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while !catches_sigterm(slake.id()) {
+        assert!(Instant::now() < deadline, "slake never installed its relay");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let kill = std::process::Command::new("kill")
+        .args(["-TERM", &slake.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(kill.success());
+    thread::sleep(Duration::from_millis(100));
+    held.rollback().expect("release the ledger lock");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = slake.try_wait().expect("wait") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "slake did not stop");
+        thread::sleep(Duration::from_millis(10));
+    };
+    let mut stdout = String::new();
+    std::io::Read::read_to_string(&mut slake.stdout.take().unwrap(), &mut stdout).unwrap();
+    assert_eq!(status.signal(), Some(15), "{stdout}");
+    assert!(stdout.contains("\"action\": \"stop\""), "{stdout}");
+    assert!(stdout.contains("\"skipped\": true"), "{stdout}");
+    assert!(stdout.contains("\"signal\": 15"), "{stdout}");
+    assert!(!started.exists(), "the command was started");
+
+    // Nothing was recorded and the claim is gone: the job is still ready.
+    assert!(ledger_status(&db, "early").contains("state=never-run"));
+    bin()
+        .args(["--db", &db, "clear", "--name", "early"])
+        .assert()
+        .success()
+        .stdout(contains("deleted_runs=0"));
+}

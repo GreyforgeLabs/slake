@@ -85,6 +85,7 @@ slake was released as `cooldown-guard` up to v0.3.0. Version 0.4.0 renames the c
 - Job names are 1–128 ASCII characters, start with a letter or digit, and otherwise use letters, digits, `.`, `_`, `:`, or `-`.
 - The ledger retains the newest 1,000 completed attempts per job. Existing v0.1 second-precision rows migrate in place.
 - SIGHUP, SIGINT, SIGQUIT and SIGTERM sent to slake while the child runs are relayed to the child; slake waits for it, records the result and releases the claim. Signals the caller ignores (for example SIGHUP under `nohup`) stay ignored for the child.
+- A stop signal that arrives after slake started but before the command did (for example while slake waits for the ledger lock) gives the claim back and starts nothing. slake prints `action=stop reason=signal signal=N` (`"action": "stop"`, `"skipped": true` in JSON), records no run and ends like a signal-terminated run, so the job is not put into failure backoff.
 - If the wall clock is set backwards, history and claims that now lie in the future are rebased to the current time on the next `run`, so the job waits one interval (or one lease) instead of until the clock catches up.
 - The ledger schema revision is kept in `PRAGMA user_version`. Older ledgers are upgraded once, in place, on first open; ledgers stay readable by earlier releases.
 - SQLite lock waits are bounded at five seconds and surface as runtime errors. `clear` refuses a live claim by default and changes nothing in that case. `clear --force` removes both history and an active claim; it does not stop a running child, so a new invocation may overlap it.
@@ -101,7 +102,7 @@ name=backup action=skip reason=cooldown last_exit_code=0 remaining=29m 41s
 
 - `0` when a run is skipped because the cooldown is active
 - Child process exit code when a command is executed
-- `128 + N` when the command is terminated by signal `N` (the shell convention, for example `143` for SIGTERM); the output then also reports `signal=N` (`"signal": N` in JSON). For SIGHUP, SIGINT and SIGTERM, slake records and prints the result and then ends by the same signal, so a shell still sees `128 + N` while systemd and other supervisors see the signal death they would see without slake
+- `128 + N` when the command is terminated by signal `N`, or when stop signal `N` arrives before the command starts (the shell convention, for example `143` for SIGTERM); the output then also reports `signal=N` (`"signal": N` in JSON). For SIGHUP, SIGINT and SIGTERM, slake records and prints the result and then ends by the same signal, so a shell still sees `128 + N` while systemd and other supervisors see the signal death they would see without slake
 - `2` on `slake` usage or runtime errors
 
 ## Documentation

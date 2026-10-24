@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- A stop signal (SIGHUP, SIGINT, SIGQUIT or SIGTERM) that arrives before the command starts, for example while slake waits for the ledger lock, now releases the claim and starts nothing. Before, slake started the command, killed it at once with the queued signal and recorded a failure, which put the job into failure backoff. slake reports `action=stop reason=signal signal=N` (JSON: `"action": "stop"`, `"skipped": true`, `"signal": N`) and ends like a signal-terminated run (`128 + N`, or death by the same signal for SIGHUP, SIGINT and SIGTERM).
 - Durations and the job name are validated before the ledger is opened. A mistyped invocation no longer creates the ledger file and its directory, and no longer waits on a locked ledger before it reports the usage error.
 
 ## [0.5.0] - 2026-10-14
