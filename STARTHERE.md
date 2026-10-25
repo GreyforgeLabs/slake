@@ -54,7 +54,7 @@ slake/
 
 ```bash
 cargo run --locked -- --version
-# Expected output: slake 0.5.0
+# Expected output: slake 0.5.1
 ```
 
 ## Key Entry Points

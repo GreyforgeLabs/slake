@@ -1,6 +1,6 @@
 [package]
 name = "slake"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 description = "Minimum-interval guard for cron jobs and recurring commands"
 license = "AGPL-3.0-only"

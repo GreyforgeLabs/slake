@@ -4,7 +4,7 @@
 **Pipeline:** `forge openforge slake`
 **License:** AGPL-3.0
 **Repo:** `github.com/GreyforgeLabs/slake`
-**Version:** v0.5.0
+**Version:** v0.5.1
 **Formerly:** `cooldown-guard` (released under that name up to v0.3.0; the `cooldown-guard` binary remains as a deprecated alias until a future release)
 **Language:** Rust
 
