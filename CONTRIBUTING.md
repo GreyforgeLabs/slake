@@ -7,7 +7,7 @@ This project is intentionally small: one SQLite-backed CLI, one policy, one test
 1. Fork the repository.
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/slake.git`
 3. Enter the repo and run setup: `cd slake && ./scripts/setup.sh`
-5. Create a branch: `git checkout -b your-feature`
+4. Create a branch: `git checkout -b your-feature`
 
 ## Development Workflow
 
@@ -30,7 +30,7 @@ chore: update dependencies
 
 ## Pull Request Process
 
-1. Fill out the PR template.
+1. Describe what the change does and why.
 2. Ensure CI passes.
 3. Keep PRs focused; one logical behavior or tooling change per PR.
 4. Explain any CLI or cooldown policy change with a before/after example.
@@ -40,7 +40,7 @@ chore: update dependencies
 1. Update `Cargo.toml` and `CHANGELOG.md` for the intended version.
 2. Run `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --locked`.
 3. Create and push a `vX.Y.Z` tag that matches `package.version` in `Cargo.toml`.
-4. Let the release workflow package artifacts once it exists.
+4. The release workflow checks the tag against the crate version, runs the checks, and publishes a GitHub release with the Linux x86_64 tarball and its SHA-256 checksum.
 
 ## Code Standards
 
@@ -52,7 +52,7 @@ chore: update dependencies
 
 ## Reporting Issues
 
-Use the GitHub issue templates. For bugs, include the exact command, expected behavior, actual behavior, and whether a custom `--db` path was involved.
+Open a GitHub issue. For bugs, include the exact command, expected behavior, actual behavior, and whether a custom `--db` path was involved.
 
 ## License
 
