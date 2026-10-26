@@ -39,7 +39,7 @@ Any platform with Rust 1.88 or newer (Linux and macOS):
 cargo install --locked --git https://github.com/GreyforgeLabs/slake --tag v0.5.1
 ```
 
-Coming from `cooldown-guard`? The tarball also contains the `cooldown-guard` alias (`cargo install` installs it too); see [Renamed from cooldown-guard](#renamed-from-cooldown-guard).
+Coming from `cooldown-guard`? The tarball also contains the `cooldown-guard` alias: install it with `install -Dm755 $PKG/cooldown-guard ~/.local/bin/cooldown-guard` (`cargo install` installs it too); see [Renamed from cooldown-guard](#renamed-from-cooldown-guard).
 
 ## Quick start
 
