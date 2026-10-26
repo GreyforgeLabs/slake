@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="954" height="273" viewBox="0 0 954 273" role="img" aria-label="slake">
+<title>slake</title>
+<rect width="954" height="273" rx="10" fill="#0a0d11"/>
+<path d="M0 10a10 10 0 0 1 10-10h934a10 10 0 0 1 10 10v18H0z" fill="#151a21"/>
+<circle cx="18" cy="14" r="5.5" fill="#ff5f57"/>
+<circle cx="36" cy="14" r="5.5" fill="#febc2e"/>
+<circle cx="54" cy="14" r="5.5" fill="#28c840"/>
+<text x="477.0" y="18.5" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#7d8794">slake</text>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono','DejaVu Sans Mono',monospace" font-size="13" fill="#e9edf1" xml:space="preserve">
+<text x="18" y="44" textLength="461.4" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">slake run --name backup --min-interval 30m -- ./backup.sh</tspan></text>
+<text x="18" y="63" textLength="273.7" lengthAdjust="spacingAndGlyphs"><tspan fill="#be96ff">backup</tspan>: 1,284 files, 212 MB written</text>
+<text x="18" y="82" textLength="523.9" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">name</tspan>=backup <tspan fill="#7d8794">action</tspan>=<tspan fill="#7ed38c">run</tspan> <tspan fill="#7d8794">exit_code</tspan>=<tspan fill="#7ed38c">0</tspan> <tspan fill="#7d8794">finished_at</tspan>=2026-10-26T21:56:01Z</text>
+<text x="18" y="101" textLength="461.4" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">slake run --name backup --min-interval 30m -- ./backup.sh</tspan></text>
+<text x="18" y="120" textLength="578.7" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">name</tspan>=backup <tspan fill="#7d8794">action</tspan>=<tspan fill="#fda52b">skip</tspan> <tspan fill="#7d8794">reason</tspan>=cooldown <tspan fill="#7d8794">last_exit_code</tspan>=<tspan fill="#7ed38c">0</tspan> <tspan fill="#7d8794">remaining</tspan>=<tspan fill="#ffffff">29m 58s</tspan></text>
+<text x="18" y="139" textLength="367.5" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">slake status --name backup --min-interval 30m</tspan></text>
+<text x="18" y="158" textLength="914.9" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">name</tspan>=backup <tspan fill="#7d8794">action</tspan>=<tspan fill="#38c8e8">status</tspan> <tspan fill="#7d8794">state</tspan>=<tspan fill="#fda52b">cooling-down</tspan> <tspan fill="#7d8794">last_exit_code</tspan>=<tspan fill="#7ed38c">0</tspan> <tspan fill="#7d8794">last_finished_at</tspan>=2026-10-26T21:56:01Z <tspan fill="#7d8794">remaining</tspan>=<tspan fill="#ffffff">29m 58s</tspan></text>
+<text x="18" y="177" textLength="586.5" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">slake run --name sync --min-interval 6h --failure-backoff 5m -- ./sync.sh</tspan></text>
+<text x="18" y="196" textLength="203.3" lengthAdjust="spacingAndGlyphs"><tspan fill="#be96ff">sync</tspan>: upstream unreachable</text>
+<text x="18" y="215" textLength="508.3" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">name</tspan>=sync <tspan fill="#7d8794">action</tspan>=<tspan fill="#7ed38c">run</tspan> <tspan fill="#7d8794">exit_code</tspan>=<tspan fill="#ff6b6b">7</tspan> <tspan fill="#7d8794">finished_at</tspan>=2026-10-26T21:56:03Z</text>
+<text x="18" y="234" textLength="586.5" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">$ </tspan><tspan fill="#ffffff">slake run --name sync --min-interval 6h --failure-backoff 5m -- ./sync.sh</tspan></text>
+<text x="18" y="253" textLength="523.9" lengthAdjust="spacingAndGlyphs"><tspan fill="#7d8794">name</tspan>=sync <tspan fill="#7d8794">action</tspan>=<tspan fill="#fda52b">skip</tspan> <tspan fill="#7d8794">reason</tspan>=cooldown <tspan fill="#7d8794">last_exit_code</tspan>=<tspan fill="#ff6b6b">7</tspan> <tspan fill="#7d8794">remaining</tspan>=<tspan fill="#ffffff">5m</tspan></text>
+</g>
+</svg>

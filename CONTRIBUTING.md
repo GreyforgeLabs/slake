@@ -41,6 +41,7 @@ chore: update dependencies
 2. Run `cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --locked`.
 3. Create and push a `vX.Y.Z` tag that matches `package.version` in `Cargo.toml`.
 4. The release workflow checks the tag against the crate version, runs the checks, and publishes a GitHub release with the Linux x86_64 tarball and its SHA-256 checksum.
+5. Once the release is published, update `VER=` and `--tag` in the README Install section to the new tag, and check the snippet still downloads and verifies.
 
 ## Code Standards
 
